@@ -8,13 +8,13 @@ const ScreenRecorder = () => {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [recordedChunks, setRecordedChunks] = useState([]);
   const [transcription, setTranscription] = useState(""); // Store transcribed speech
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [recognition, setRecognition] = useState(null); // SpeechRecognition instance
+  const [isRecognitionRunning, setIsRecognitionRunning] = useState(false); // Track recognition status
   const [position, setPosition] = useState({ x: 20, y: 20 }); // Position of draggable video
   const [size, setSize] = useState({ width: 150, height: 150 }); // Size of draggable video
   const [timer, setTimer] = useState(0); // Timer state
   const [intervalId, setIntervalId] = useState(null); // Interval for timer
   const webcamVideoRef = useRef(null);
+  const recognitionRef = useRef(null); // Store SpeechRecognition instance
 
   // Initialize SpeechRecognition
   useEffect(() => {
@@ -24,30 +24,57 @@ const ScreenRecorder = () => {
     }
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
-    const speechRecognition = new SpeechRecognition();
-    speechRecognition.continuous = true; // Continuous recognition
-    speechRecognition.interimResults = true; // Capture interim results
-    speechRecognition.lang = "en-US"; // Language for transcription
-    setRecognition(speechRecognition);
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true; // Continuous recognition
+    recognition.interimResults = true; // Capture interim results
+    recognition.lang = "en-US"; // Language for transcription
+    recognitionRef.current = recognition;
 
-    speechRecognition.onresult = (event) => {
+    recognition.onresult = (event) => {
       const transcript = Array.from(event.results)
         .map((result) => result[0].transcript)
         .join(" ");
       setTranscription(transcript); // Update transcription in real-time
+      console.log("Transcription updated:", transcript);
     };
 
-    speechRecognition.onerror = (err) => {
+    recognition.onerror = (err) => {
       console.error("SpeechRecognition error:", err);
     };
 
-    speechRecognition.onend = () => {
-      // Restart recognition if recording is still active
-      if (isTranscribing) {
-        speechRecognition.start();
+    recognition.onend = () => {
+      // Restart recognition if still recording
+      if (recording) {
+        console.log("Speech recognition stopped. Restarting...");
+        startSpeechRecognition();
       }
     };
-  }, [isTranscribing]);
+
+    console.log("SpeechRecognition initialized.");
+  }, [recording]);
+
+  // Start SpeechRecognition
+  const startSpeechRecognition = () => {
+    if (recognitionRef.current && !isRecognitionRunning) {
+      try {
+        console.log("Starting SpeechRecognition...");
+        recognitionRef.current.start();
+        setIsRecognitionRunning(true);
+      } catch (err) {
+        console.error("Error starting SpeechRecognition:", err);
+        setIsRecognitionRunning(false);
+      }
+    }
+  };
+
+  // Stop SpeechRecognition
+  const stopSpeechRecognition = () => {
+    if (recognitionRef.current) {
+      console.log("Stopping SpeechRecognition...");
+      recognitionRef.current.stop();
+      setIsRecognitionRunning(false);
+    }
+  };
 
   // Start recording and transcription
   const startRecording = async () => {
@@ -81,10 +108,7 @@ const ScreenRecorder = () => {
       setIntervalId(id);
 
       // Start speech recognition
-      if (recognition) {
-        setIsTranscribing(true);
-        recognition.start();
-      }
+      startSpeechRecognition();
     } catch (error) {
       console.error("Error starting recording:", error);
     }
@@ -103,10 +127,7 @@ const ScreenRecorder = () => {
     setTimer(0); // Reset timer
 
     // Stop speech recognition
-    if (recognition) {
-      recognition.stop();
-      setIsTranscribing(false);
-    }
+    stopSpeechRecognition();
   };
 
   const saveRecording = () => {
@@ -130,9 +151,9 @@ const ScreenRecorder = () => {
 
   return (
     <DndProvider backend={HTML5Backend}>
-      <div style={{ position: "relative", zIndex: 1000 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "20px", padding: "20px" }}>
         {/* Controls */}
-        <div style={{ position: "absolute", top: "10px", left: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px",zIndex:2000 }}>
           <button onClick={startRecording} disabled={recording}>
             Start Recording
           </button>
@@ -144,25 +165,26 @@ const ScreenRecorder = () => {
           </button>
           {/* Timer */}
           {recording && (
-            <span style={{ marginLeft: "10px", fontSize: "18px", fontWeight: "bold" }}>
+            <span style={{ fontSize: "18px", fontWeight: "bold" }}>
               {formatTime(timer)}
             </span>
           )}
         </div>
 
         {/* Real-Time Transcription */}
-          <div
-            style={{
-              width: "calc(100% - 20px)",
-              background: "rgba(0, 0, 0, 0.8)",
-              color: "white",
-              padding: "10px",
-              borderRadius: "8px",
-              zIndex: 1100,
-            }}
-          >
-            <p style={{marginTop:100}}>{transcription || "Listening..."}</p>
-            </div>
+        <div
+          style={{
+            background: "rgba(0, 0, 0, 0.8)",
+            color: "white",
+            padding: "10px",
+            borderRadius: "8px",
+            overflowY: "auto",
+            maxHeight: "150px",
+            flex: "1",
+          }}
+        >
+          <p>{transcription || "Listening..."}</p>
+        </div>
 
         {/* Draggable Video */}
         <DraggableVideo
