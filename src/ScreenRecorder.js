@@ -2,84 +2,40 @@ import React, { useState, useRef, useEffect } from "react";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import DraggableVideo from "./DraggableVideo";
+import MicRecorder from "mic-recorder-to-mp3";
+import axios from "axios";
 
-const ScreenRecorder = () => {
+const ScreenRecorder = ({setTranscriptionFinal}) => {
   const [recording, setRecording] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [recordedChunks, setRecordedChunks] = useState([]);
-  const [transcription, setTranscription] = useState(""); // Store transcribed speech
-  const [isRecognitionRunning, setIsRecognitionRunning] = useState(false); // Track recognition status
-  const [position, setPosition] = useState({ x: 20, y: 20 }); // Position of draggable video
-  const [size, setSize] = useState({ width: 150, height: 150 }); // Size of draggable video
-  const [timer, setTimer] = useState(0); // Timer state
-  const [intervalId, setIntervalId] = useState(null); // Interval for timer
+  const [transcription, setTranscription] = useState("");
+  const [timer, setTimer] = useState(0);
+  const [intervalId, setIntervalId] = useState(null);
+  const [audioFile, setAudioFile] = useState(null);
+
+  const [position, setPosition] = useState({ x: 20, y: 20 }); // Draggable position
+  const [size, setSize] = useState({ width: 150, height: 150 }); // Resizable size
+  const [isFullscreen, setIsFullscreen] = useState(false); // Fullscreen toggle
+
   const webcamVideoRef = useRef(null);
-  const recognitionRef = useRef(null); // Store SpeechRecognition instance
+  const recorder = useRef(null);
 
-  // Initialize SpeechRecognition
   useEffect(() => {
-    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) {
-      console.error("SpeechRecognition is not supported in this browser.");
-      return;
+    if(transcription){
+      setTranscriptionFinal(transcription)
+
     }
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true; // Continuous recognition
-    recognition.interimResults = true; // Capture interim results
-    recognition.lang = "en-US"; // Language for transcription
-    recognitionRef.current = recognition;
+  }, [transcription])
+  
+  // Initialize MicRecorder
+  useEffect(() => {
+    recorder.current = new MicRecorder({ bitRate: 128 });
+  }, []);
 
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0].transcript)
-        .join(" ");
-      setTranscription(transcript); // Update transcription in real-time
-      console.log("Transcription updated:", transcript);
-    };
-
-    recognition.onerror = (err) => {
-      console.error("SpeechRecognition error:", err);
-    };
-
-    recognition.onend = () => {
-      // Restart recognition if still recording
-      if (recording) {
-        console.log("Speech recognition stopped. Restarting...");
-        startSpeechRecognition();
-      }
-    };
-
-    console.log("SpeechRecognition initialized.");
-  }, [recording]);
-
-  // Start SpeechRecognition
-  const startSpeechRecognition = () => {
-    if (recognitionRef.current && !isRecognitionRunning) {
-      try {
-        console.log("Starting SpeechRecognition...");
-        recognitionRef.current.start();
-        setIsRecognitionRunning(true);
-      } catch (err) {
-        console.error("Error starting SpeechRecognition:", err);
-        setIsRecognitionRunning(false);
-      }
-    }
-  };
-
-  // Stop SpeechRecognition
-  const stopSpeechRecognition = () => {
-    if (recognitionRef.current) {
-      console.log("Stopping SpeechRecognition...");
-      recognitionRef.current.stop();
-      setIsRecognitionRunning(false);
-    }
-  };
-
-  // Start recording and transcription
   const startRecording = async () => {
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true , audio: true });
       const webcamStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
       if (webcamVideoRef.current) {
@@ -91,44 +47,76 @@ const ScreenRecorder = () => {
         ...webcamStream.getTracks(),
       ]);
 
-      const recorder = new MediaRecorder(combinedStream);
-      setMediaRecorder(recorder);
+      const recorderInstance = new MediaRecorder(combinedStream);
+      setMediaRecorder(recorderInstance);
 
-      recorder.ondataavailable = (event) => {
+      recorderInstance.ondataavailable = (event) => {
         if (event.data.size > 0) {
           setRecordedChunks((prev) => [...prev, event.data]);
         }
       };
 
-      recorder.start();
+      recorderInstance.start();
       setRecording(true);
 
-      // Start timer
       const id = setInterval(() => setTimer((prev) => prev + 1), 1000);
       setIntervalId(id);
 
-      // Start speech recognition
-      startSpeechRecognition();
+      recorder.current.start();
     } catch (error) {
       console.error("Error starting recording:", error);
     }
   };
 
-  // Stop recording and transcription
   const stopRecording = () => {
     if (mediaRecorder) {
       mediaRecorder.stop();
     }
     setRecording(false);
 
-    // Stop timer
     clearInterval(intervalId);
     setIntervalId(null);
-    setTimer(0); // Reset timer
+    setTimer(0);
 
-    // Stop speech recognition
-    stopSpeechRecognition();
+    recorder.current
+      .stop()
+      .getMp3()
+      .then(([buffer, blob]) => {
+        const file = new File(buffer, "audio.mp3", {
+          type: blob.type,
+          lastModified: Date.now(),
+        });
+        setAudioFile(file);
+        submitAudio(file);
+      })
+      .catch((e) => console.log(e));
   };
+
+  const submitAudio = async (file) => {
+    if (!file) {
+      alert("No audio file to submit.");
+      return;
+    }
+  
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("language", "en");
+  
+    try {
+      const response = await axios.post("http://127.0.0.1:8000/transcribe/", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+        params: { language: "en" }, // ✅ Correct way to send language query
+      });
+  
+      setTranscription(response.data.transcription);
+    } catch (error) {
+      console.error("Error submitting audio for transcription:", error);
+      alert("Failed to transcribe audio. Please try again.");
+    }
+  };
+  
 
   const saveRecording = () => {
     if (recordedChunks.length > 0) {
@@ -142,49 +130,67 @@ const ScreenRecorder = () => {
     }
   };
 
-  // Format time for display
   const formatTime = (time) => {
     const minutes = Math.floor(time / 60);
     const seconds = time % 60;
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   };
 
+  // Toggle fullscreen mode
+  const toggleFullscreen = () => {
+    if (!isFullscreen) {
+      setPosition({ x: 0, y: 0 });
+      setSize({ width: window.innerWidth, height: window.innerHeight });
+    } else {
+      setPosition({ x: 20, y: 20 });
+      setSize({ width: 150, height: 150 });
+    }
+    setIsFullscreen(!isFullscreen);
+  };
+
   return (
     <DndProvider backend={HTML5Backend}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "20px", padding: "20px" }}>
+      <div className="flex flex-col gap-6 p-6 bg-gray-100  w-full">
+    
         {/* Controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px",zIndex:2000 }}>
-          <button onClick={startRecording} disabled={recording}>
+        <div className="flex justify-center items-center gap-4">
+          <button
+            onClick={startRecording}
+            disabled={recording}
+            className={`px-4 py-2 font-semibold text-white rounded ${
+              recording ? "bg-gray-400 cursor-not-allowed" : "bg-green-500 hover:bg-green-600"
+            }`}
+          >
             Start Recording
           </button>
-          <button onClick={stopRecording} disabled={!recording}>
+          <button
+            onClick={stopRecording}
+            disabled={!recording}
+            className={`px-4 py-2 font-semibold text-white rounded ${
+              !recording ? "bg-gray-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600"
+            }`}
+          >
             Stop Recording
           </button>
-          <button onClick={saveRecording} disabled={recordedChunks.length === 0}>
+          <button
+            onClick={saveRecording}
+            disabled={recordedChunks.length === 0}
+            className={`px-4 py-2 font-semibold text-white rounded ${
+              recordedChunks.length === 0
+                ? "bg-gray-400 cursor-not-allowed"
+                : "bg-blue-500 hover:bg-blue-600"
+            }`}
+          >
             Save Recording
           </button>
-          {/* Timer */}
-          {recording && (
-            <span style={{ fontSize: "18px", fontWeight: "bold" }}>
-              {formatTime(timer)}
-            </span>
-          )}
         </div>
 
-        {/* Real-Time Transcription */}
-        <div
-          style={{
-            background: "rgba(0, 0, 0, 0.8)",
-            color: "white",
-            padding: "10px",
-            borderRadius: "8px",
-            overflowY: "auto",
-            maxHeight: "150px",
-            flex: "1",
-          }}
-        >
-          <p>{transcription || "Listening..."}</p>
-        </div>
+        {/* Timer */}
+        {recording && (
+          <div className="text-center text-xl font-bold text-gray-700">
+            Timer: {formatTime(timer)}
+          </div>
+        )}
 
         {/* Draggable Video */}
         <DraggableVideo
@@ -193,8 +199,8 @@ const ScreenRecorder = () => {
           setPosition={setPosition}
           size={size}
           setSize={setSize}
-          isFullscreen={false}
-          toggleFullscreen={() => {}}
+          isFullscreen={isFullscreen}
+          toggleFullscreen={toggleFullscreen}
         />
       </div>
     </DndProvider>
